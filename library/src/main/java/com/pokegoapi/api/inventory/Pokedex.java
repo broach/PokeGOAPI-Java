@@ -17,15 +17,16 @@ package com.pokegoapi.api.inventory;
 
 import POGOProtos.Data.PokedexEntryOuterClass.PokedexEntry;
 import POGOProtos.Enums.PokemonIdOuterClass.PokemonId;
+
 import com.pokegoapi.api.PokemonGo;
 
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.Map;
 
 public class Pokedex {
 
 	private PokemonGo api;
-	private Map<PokemonId, PokedexEntry> pokedexMap = new HashMap<>();
+	private Map<PokemonId, PokedexEntry> pokedexMap = new EnumMap<>(PokemonId.class);
 
 	public Pokedex(PokemonGo pgo) {
 		reset(pgo);
@@ -33,11 +34,12 @@ public class Pokedex {
 
 	public void reset(PokemonGo pgo) {
 		this.api = pgo;
-		pokedexMap = new HashMap<>();
+		pokedexMap = new EnumMap<PokemonId, PokedexEntry>(PokemonId.class);
 	}
 
 	/**
 	 * Add/Update a PokdexEntry.
+	 *
 	 * @param entry The entry to add or update
 	 */
 	public void add(PokedexEntry entry) {
@@ -47,6 +49,7 @@ public class Pokedex {
 
 	/**
 	 * Get a pokedex entry value.
+	 *
 	 * @param pokemonId the ID of the pokemon to get
 	 * @return Entry if in pokedex or null if it doesn't
 	 */

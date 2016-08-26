@@ -18,9 +18,12 @@ package com.pokegoapi.api;
 import POGOProtos.Enums.TutorialStateOuterClass;
 import POGOProtos.Enums.TutorialStateOuterClass.TutorialState;
 import POGOProtos.Networking.Envelopes.RequestEnvelopeOuterClass.RequestEnvelope.AuthInfo;
-import POGOProtos.Networking.Requests.Messages.MarkTutorialCompleteMessageOuterClass;
-import POGOProtos.Networking.Requests.RequestTypeOuterClass.RequestType;
+import POGOProtos.Networking.Envelopes.SignatureOuterClass;
 
+import com.pokegoapi.api.device.ActivityStatus;
+import com.pokegoapi.api.device.DeviceInfo;
+import com.pokegoapi.api.device.LocationFixes;
+import com.pokegoapi.api.device.SensorInfo;
 import com.pokegoapi.api.inventory.Inventories;
 import com.pokegoapi.api.map.Map;
 import com.pokegoapi.api.player.PlayerProfile;
@@ -32,19 +35,23 @@ import com.pokegoapi.main.RequestHandler;
 import com.pokegoapi.main.ServerRequest;
 import com.pokegoapi.util.SystemTimeImpl;
 import com.pokegoapi.util.Time;
+
 import lombok.Getter;
 import lombok.Setter;
 import okhttp3.OkHttpClient;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Random;
+import java.util.UUID;
 
 
 public class PokemonGo {
 
 	private static final java.lang.String TAG = PokemonGo.class.getSimpleName();
 	private final Time time;
-	public final long startTime;
+	@Getter
+	private final long startTime;
+	@Getter
+	private final byte[] sessionHash;
 	@Getter
 	RequestHandler requestHandler;
 	@Getter
@@ -58,8 +65,23 @@ public class PokemonGo {
 	@Setter
 	private double altitude;
 	private CredentialProvider credentialProvider;
+	@Getter
 	private Settings settings;
 	private Map map;
+	@Setter
+	private DeviceInfo deviceInfo;
+	@Getter
+	@Setter
+	public SensorInfo sensorInfo;
+	@Getter
+	@Setter
+	public ActivityStatus activityStatus;
+	@Setter
+	@Getter
+	private long seed;
+	@Getter
+	@Setter
+	public LocationFixes locationFixes;
 
 	/**
 	 * Instantiates a new Pokemon go.
@@ -67,25 +89,61 @@ public class PokemonGo {
 	 * @param credentialProvider the credential provider
 	 * @param client             the http client
 	 * @param time               a time implementation
+	 * @param seed               the seed to generate same device
 	 * @throws LoginFailedException  When login fails
 	 * @throws RemoteServerException When server fails
 	 */
 
-	public PokemonGo(CredentialProvider credentialProvider, OkHttpClient client, Time time)
+	public PokemonGo(CredentialProvider credentialProvider, OkHttpClient client, Time time, long seed)
 			throws LoginFailedException, RemoteServerException {
-
 		if (credentialProvider == null) {
 			throw new LoginFailedException("Credential Provider is null");
 		} else {
 			this.credentialProvider = credentialProvider;
 		}
 		this.time = time;
+		startTime = currentTimeMillis();
+		this.seed = seed;
+
+		sessionHash = new byte[32];
+		new Random().nextBytes(sessionHash);
+
 		requestHandler = new RequestHandler(this, client);
 		playerProfile = new PlayerProfile(this);
+		settings = new Settings(this);
 		map = new Map(this);
 		longitude = Double.NaN;
 		latitude = Double.NaN;
-		startTime = currentTimeMillis();
+	}
+
+	/**
+	 * Instantiates a new Pokemon go.
+	 * Deprecated: specify a time implementation
+	 *
+	 * @param credentialProvider the credential provider
+	 * @param client             the http client
+	 * @param seed               the seed to generate same device
+	 * @throws LoginFailedException  When login fails
+	 * @throws RemoteServerException When server fails
+	 */
+	public PokemonGo(CredentialProvider credentialProvider, OkHttpClient client, long seed)
+			throws LoginFailedException, RemoteServerException {
+		this(credentialProvider, client, new SystemTimeImpl(), seed);
+	}
+
+	/**
+	 * Instantiates a new Pokemon go.
+	 * Deprecated: specify a time implementation
+	 *
+	 * @param credentialProvider the credential provider
+	 * @param client             the http client
+	 * @param time               a time implementation
+	 * @throws LoginFailedException  When login fails
+	 * @throws RemoteServerException When server fails
+	 */
+	public PokemonGo(CredentialProvider credentialProvider, OkHttpClient client, Time time)
+			throws LoginFailedException, RemoteServerException {
+		this(credentialProvider, client, time, hash(UUID.randomUUID().toString()));
 	}
 
 	/**
@@ -99,14 +157,33 @@ public class PokemonGo {
 	 */
 	public PokemonGo(CredentialProvider credentialProvider, OkHttpClient client)
 			throws LoginFailedException, RemoteServerException {
-		this(credentialProvider, client, new SystemTimeImpl());
+		this(credentialProvider, client, new SystemTimeImpl(), hash(UUID.randomUUID().toString()));
+	}
+
+	/**
+	 * Hash the given string
+	 *
+	 * @param string string to hash
+	 * @return the hashed long
+	 */
+	private static long hash(String string) {
+		long upper = ((long) string.hashCode()) << 32;
+		int len = string.length();
+		StringBuilder dest = new StringBuilder(len);
+
+		for (int index = (len - 1); index >= 0; index--) {
+			dest.append(string.charAt(index));
+		}
+		long lower = ((long) dest.toString().hashCode()) - ((long) Integer.MIN_VALUE);
+		return upper + lower;
 	}
 
 	/**
 	 * Fetches valid AuthInfo
 	 *
 	 * @return AuthInfo object
-	 * @throws LoginFailedException when login fails
+	 * @throws LoginFailedException  when login fails
+	 * @throws RemoteServerException When server fails
 	 */
 	public AuthInfo getAuthInfo()
 			throws LoginFailedException, RemoteServerException {
@@ -121,6 +198,11 @@ public class PokemonGo {
 	 * @param altitude  the altitude
 	 */
 	public void setLocation(double latitude, double longitude, double altitude) {
+		if (latitude != this.latitude
+				|| longitude != this.longitude
+				|| altitude != this.altitude) {
+			getMap().clearCache();
+		}
 		setLatitude(latitude);
 		setLongitude(longitude);
 		setAltitude(altitude);
@@ -134,7 +216,7 @@ public class PokemonGo {
 	 * Get the inventories API
 	 *
 	 * @return Inventories
-	 * @throws LoginFailedException when login fails
+	 * @throws LoginFailedException  when login fails
 	 * @throws RemoteServerException when server down/issue
 	 */
 	public Inventories getInventories() throws LoginFailedException, RemoteServerException {
@@ -144,26 +226,10 @@ public class PokemonGo {
 		return inventories;
 	}
 
-
-	/**
-	 * Get the settings API
-	 *
-	 * @return Settings
-	 * @throws LoginFailedException when login fails
-	 * @throws RemoteServerException when server down/issue
-	 */
-	public Settings getSettings() throws LoginFailedException, RemoteServerException {
-		if (settings == null) {
-			settings = new Settings(this);
-		}
-		return settings;
-	}
-
-
-
 	/**
 	 * Validates and sets a given latitude value
 	 *
+	 * @param value the latitude
 	 * @throws IllegalArgumentException if value exceeds +-90
 	 */
 	public void setLatitude(double value) {
@@ -176,6 +242,7 @@ public class PokemonGo {
 	/**
 	 * Validates and sets a given longitude value
 	 *
+	 * @param value the longitude
 	 * @throws IllegalArgumentException if value exceeds +-180
 	 */
 	public void setLongitude(double value) {
@@ -188,6 +255,7 @@ public class PokemonGo {
 	/**
 	 * Gets the map API
 	 *
+	 * @return the map
 	 * @throws IllegalStateException if location has not been set
 	 */
 	public Map getMap() {
@@ -197,13 +265,15 @@ public class PokemonGo {
 		return map;
 	}
 
-	public void skipTos() throws LoginFailedException, RemoteServerException {
-		MarkTutorialCompleteMessageOuterClass.MarkTutorialCompleteMessage.Builder tosBuilder = MarkTutorialCompleteMessageOuterClass
-				.MarkTutorialCompleteMessage.newBuilder();
-		tosBuilder.addTutorialsCompleted(TutorialState.LEGAL_SCREEN)
-				.setSendMarketingEmails(false)
-				.setSendPushNotifications(false);
-		ServerRequest serverRequest = new ServerRequest(RequestType.MARK_TUTORIAL_COMPLETE, tosBuilder.build());
-		getRequestHandler().sendServerRequests(serverRequest);
+	/**
+	 * Gets the device info
+	 *
+	 * @return the device info
+	 */
+	public SignatureOuterClass.Signature.DeviceInfo getDeviceInfo() {
+		if (deviceInfo == null) {
+			deviceInfo = DeviceInfo.getDefault(this);
+		}
+		return deviceInfo.getDeviceInfo();
 	}
 }

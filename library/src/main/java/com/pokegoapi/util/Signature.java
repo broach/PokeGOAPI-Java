@@ -1,14 +1,17 @@
 package com.pokegoapi.util;
 
-import POGOProtos.Networking.Envelopes.AuthTicketOuterClass;
 import POGOProtos.Networking.Envelopes.RequestEnvelopeOuterClass;
 import POGOProtos.Networking.Envelopes.SignatureOuterClass;
 import POGOProtos.Networking.Envelopes.Unknown6OuterClass;
 import POGOProtos.Networking.Envelopes.Unknown6OuterClass.Unknown6.Unknown2;
 import POGOProtos.Networking.Requests.RequestOuterClass;
+
 import com.google.protobuf.ByteString;
 import com.pokegoapi.api.PokemonGo;
-import com.pokegoapi.main.ServerRequest;
+import com.pokegoapi.api.device.ActivityStatus;
+import com.pokegoapi.api.device.LocationFixes;
+import com.pokegoapi.api.device.SensorInfo;
+
 import net.jpountz.xxhash.StreamingXXHash32;
 import net.jpountz.xxhash.StreamingXXHash64;
 import net.jpountz.xxhash.XXHashFactory;
@@ -20,7 +23,7 @@ public class Signature {
 	/**
 	 * Given a fully built request, set the signature correctly.
 	 *
-	 * @param api the api
+	 * @param api     the api
 	 * @param builder the requestenvelop builder
 	 */
 	public static void setSignature(PokemonGo api, RequestEnvelopeOuterClass.RequestEnvelope.Builder builder) {
@@ -28,20 +31,37 @@ public class Signature {
 			//System.out.println("Ticket == null");
 			return;
 		}
-		byte[] uk22 = new byte[32];
-		new Random().nextBytes(uk22);
 
-		long curTime = api.currentTimeMillis();
+		long currentTime = api.currentTimeMillis();
 
 		byte[] authTicketBA = builder.getAuthTicket().toByteArray();
 
-		SignatureOuterClass.Signature.Builder sigBuilder = SignatureOuterClass.Signature.newBuilder()
-				.setLocationHash1(getLocationHash1(api, authTicketBA, builder))
-				.setLocationHash2(getLocationHash2(api, builder))
-				.setUnk22(ByteString.copyFrom(uk22))
-				.setTimestamp(api.currentTimeMillis())
-				.setTimestampSinceStart(curTime - api.startTime);
+		/*
+			Todo : reuse this later when we know the input
+			byte[] unknown = "b8fa9757195897aae92c53dbcf8a60fb3d86d745".getBytes();
+			XXHashFactory factory = XXHashFactory.safeInstance();
+			StreamingXXHash64 xx64 = factory.newStreamingHash64(0x88533787);
+			xx64.update(unknown, 0, unknown.length);
+			long unknown25 = xx64.getValue();
+		*/
 
+		Random random = new Random();
+
+		SignatureOuterClass.Signature.Builder sigBuilder = SignatureOuterClass.Signature.newBuilder()
+				.setLocationHash1(getLocationHash1(api, authTicketBA))
+				.setLocationHash2(getLocationHash2(api))
+				.setSessionHash(ByteString.copyFrom(api.getSessionHash()))
+				.setTimestamp(api.currentTimeMillis())
+				.setTimestampSinceStart(currentTime - api.getStartTime())
+				.setDeviceInfo(api.getDeviceInfo())
+				.setActivityStatus(ActivityStatus.getDefault(api, random))
+				.addAllLocationFix(LocationFixes.getDefault(api, builder, currentTime, random))
+				.setUnknown25(7363665268261373700L);
+
+		SignatureOuterClass.Signature.SensorInfo sensorInfo = SensorInfo.getDefault(api, currentTime, random);
+		if (sensorInfo != null) {
+			sigBuilder.setSensorInfo(sensorInfo);
+		}
 
 		for (RequestOuterClass.Request serverRequest : builder.getRequestsList()) {
 			byte[] request = serverRequest.toByteArray();
@@ -55,7 +75,7 @@ public class Signature {
 		byte[] encrypted = Crypto.encrypt(uk2, iv).toByteBuffer().array();
 		Unknown6OuterClass.Unknown6 uk6 = Unknown6OuterClass.Unknown6.newBuilder()
 				.setRequestType(6)
-				.setUnknown2(Unknown2.newBuilder().setUnknown1(ByteString.copyFrom(encrypted))).build();
+				.setUnknown2(Unknown2.newBuilder().setEncryptedSignature(ByteString.copyFrom(encrypted))).build();
 		builder.addUnknown6(uk6);
 	}
 
@@ -73,8 +93,7 @@ public class Signature {
 		};
 	}
 
-
-	private static int getLocationHash1(PokemonGo api, byte[] authTicket, RequestEnvelopeOuterClass.RequestEnvelope.Builder builder) {
+	private static int getLocationHash1(PokemonGo api, byte[] authTicket) {
 		XXHashFactory factory = XXHashFactory.safeInstance();
 		StreamingXXHash32 xx32 = factory.newStreamingHash32(0x1B845238);
 		xx32.update(authTicket, 0, authTicket.length);
@@ -89,7 +108,7 @@ public class Signature {
 		return xx32.getValue();
 	}
 
-	private static int getLocationHash2(PokemonGo api, RequestEnvelopeOuterClass.RequestEnvelope.Builder builder) {
+	private static int getLocationHash2(PokemonGo api) {
 		XXHashFactory factory = XXHashFactory.safeInstance();
 		byte[] bytes = new byte[8 * 3];
 
